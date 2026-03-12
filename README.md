@@ -1,133 +1,148 @@
 # Analytics Metadata RAG Search
 
-**RAG-inspired conversational analytics search** using LangChain, BigQuery Vector Search, and Vertex AI embeddings over structured analytics metadata on GCP.
+**Conversational search over structured analytics metadata using RAG — LangChain + BigQuery Vector Search + Vertex AI embeddings + Gemini + FastAPI, deployed on GCP.**
 
-## Overview
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=flat&logo=langchain&logoColor=white)
+![GCP](https://img.shields.io/badge/GCP-4285F4?style=flat&logo=google-cloud&logoColor=white)
+![BigQuery](https://img.shields.io/badge/BigQuery-4285F4?style=flat&logo=google-bigquery&logoColor=white)
 
-This project implements a semantic search system for analytics documentation and metadata, enabling data analysts and stakeholders to discover insights through natural language queries. Instead of querying raw data, it searches over **structured analytics metadata** (reports, metrics, dimensions) using retrieval-augmented generation (RAG).
+---
 
-### Key Features
+## What This Is
 
-- **Semantic Search**: Vector embeddings enable finding relevant analytics assets by meaning, not just keywords
-- **BigQuery Vector Store**: Native integration with BigQuery for scalable vector search
-- **LangChain Integration**: Modular RAG pipeline using LangChain for Google Cloud
-- **FastAPI REST API**: Clean API for integration with dashboards or chat interfaces
-- **Metadata-Only**: No direct data warehouse querying—safe for documentation discovery
+Data analysts spend significant time searching for the right report, metric, or dimension across sprawling BI documentation. This project solves that with a **semantic search system over analytics metadata** — enabling natural language queries like *"what are the key sales performance metrics?"* instead of keyword guessing across Confluence or dashboards.
+
+Rather than querying raw data warehouses, this system indexes **structured analytics metadata** (report descriptions, metric definitions, dimension documentation) as vector embeddings in BigQuery, then retrieves the most relevant entries and synthesizes a natural language answer using Gemini.
+
+---
 
 ## Architecture
 
 ```
 User Query
     ↓
-FastAPI Endpoint
+FastAPI  (/ask endpoint)
     ↓
-Vector Embedding (Vertex AI)
+Vertex AI  (text-embedding-004 — embed the query)
     ↓
-BigQuery Vector Search
+BigQuery Vector Search  (similarity_search, top-k with optional domain filter)
     ↓
-Retrieved Metadata (top-k)
+Retrieved Metadata Documents
     ↓
-Context Injection → LLM (Gemini)
+Context Builder  (formats type, title, domain, owner, BI tool, tags)
     ↓
-Natural Language Answer + Source Links
+Gemini 1.5 Pro  (RAG prompt → natural language answer)
+    ↓
+JSON Response  (answer + matched documents + count)
 ```
+
+---
 
 ## Tech Stack
 
-- **LangChain**: Orchestration framework
-- **Google BigQuery**: Vector store for embeddings and metadata
-- **Vertex AI**: Text embeddings (`text-embedding-004`) and LLM (`gemini-1.5-pro`)
-- **FastAPI**: REST API framework
-- **Python 3.11+**
+| Component | Technology |
+|---|---|
+| API Framework | FastAPI 0.109 + Uvicorn |
+| RAG Orchestration | LangChain 0.1.5 |
+| Vector Store | BigQuery Vector Search (`langchain-google-community`) |
+| Embeddings | Vertex AI `text-embedding-004` |
+| LLM | Vertex AI Gemini 1.5 Pro |
+| GCP SDK | `google-cloud-bigquery`, `google-cloud-aiplatform` |
+| Config | `python-dotenv` |
+| Language | Python 3.11+ |
+
+---
 
 ## Project Structure
 
 ```
 analytics-metadata-rag-search/
 ├── app/
-│   ├── config.py         # Configuration and environment variables
-│   ├── rag_chain.py      # Core RAG logic (retrieval + LLM)
-│   └── main.py           # FastAPI application
-├── scripts/
-│   ├── generate_metadata.py    # Create synthetic metadata
-│   └── build_embeddings.py     # Generate embeddings and load to BigQuery
-├── data/
-│   ├── reports.csv       # Sample report metadata
-│   └── metrics.csv       # Sample metric definitions
+│   ├── config.py        # GCP project, model, and search config via .env
+│   ├── rag_chain.py     # Core RAG logic — retrieval, context building, LLM call
+│   └── main.py          # FastAPI app — /ask and /health endpoints
 ├── requirements.txt
-├── Dockerfile
+├── .env.example         # (create this — see Setup below)
+├── .gitignore
 └── README.md
 ```
+
+---
+
+## Core Logic — How the RAG Pipeline Works
+
+**`rag_chain.py`** implements three functions that chain together:
+
+**1. `retrieve_metadata(query, domain, top_k)`**
+Embeds the user query using Vertex AI and runs `similarity_search` against the BigQuery vector store. Supports optional domain filtering (e.g. `"sales"`, `"finance"`) to scope results.
+
+**2. `build_context(docs)`**
+Formats retrieved documents into a structured context block showing `type`, `title`, `domain`, `owner`, `bi_tool`, and `tags` for each match — giving the LLM rich, structured grounding.
+
+**3. `answer_question(query, domain)`**
+Chains retrieval and context building, then calls Gemini with a constrained system prompt that instructs it to answer only from the provided metadata. Returns the answer, the matched documents, and the match count.
+
+---
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.11+
-- GCP Project with:
-  - BigQuery API enabled
-  - Vertex AI API enabled
-  - Service account with appropriate permissions
+- GCP project with BigQuery API and Vertex AI API enabled
+- Service account with `BigQuery Data Editor` and `Vertex AI User` roles
 - `gcloud` CLI configured
 
-### Installation
+### Install
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/venkatasaiv/analytics-metadata-rag-search.git
-   cd analytics-metadata-rag-search
-   ```
+```bash
+git clone https://github.com/venkatasaiv/analytics-metadata-rag-search.git
+cd analytics-metadata-rag-search
+pip install -r requirements.txt
+```
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Configure environment
 
-3. **Set up environment variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   GCP_PROJECT_ID=your-gcp-project-id
-   BQ_DATASET=analytics_metadata
-   BQ_TABLE=metadata_embeddings
-   BQ_LOCATION=US
-   EMBED_MODEL=text-embedding-004
-   LLM_MODEL=gemini-1.5-pro
-   ```
+Create a `.env` file in the project root:
 
-4. **Authenticate with GCP**:
-   ```bash
-   gcloud auth application-default login
-   ```
+```
+GCP_PROJECT_ID=your-gcp-project-id
+BQ_DATASET=analytics_metadata
+BQ_TABLE=metadata_embeddings
+BQ_LOCATION=US
+EMBED_MODEL=text-embedding-004
+LLM_MODEL=gemini-1.5-pro
+TOP_K_RESULTS=5
+TEMPERATURE=0.1
+```
 
-### Build Vector Store
+### Authenticate with GCP
 
-1. **Create BigQuery dataset**:
-   ```bash
-   bq mk --dataset --location=US your-project-id:analytics_metadata
-   ```
+```bash
+gcloud auth application-default login
+```
 
-2. **Generate and load embeddings** (example script):
-   ```bash
-   python scripts/build_embeddings.py
-   ```
+### Set up BigQuery vector store
 
-## Usage
+Create the dataset and load your analytics metadata with embeddings into BigQuery. The table must have a vector column compatible with BigQuery Vector Search. Refer to the [BigQuery Vector Search documentation](https://cloud.google.com/bigquery/docs/vector-search-intro) for schema requirements.
 
 ### Run the API
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API will be available at `http://localhost:8000`
+---
 
-### API Endpoints
+## API
 
-#### `POST /ask`
+### `POST /ask`
 
-Ask a question about analytics metadata.
+Ask a natural language question over your analytics metadata.
 
-**Request**:
+**Request:**
 ```json
 {
   "query": "What are the key metrics for sales performance?",
@@ -135,18 +150,20 @@ Ask a question about analytics metadata.
 }
 ```
 
-**Response**:
+**Response:**
 ```json
 {
-  "answer": "The key metrics for sales performance include...",
+  "answer": "The key sales performance metrics include...",
   "matches": [
     {
-      "page_content": "Report: Sales Performance Dashboard...",
+      "page_content": "Sales Performance Dashboard — tracks revenue, pipeline, and conversion rates...",
       "metadata": {
         "type": "report",
         "title": "Sales Performance Dashboard",
         "domain": "sales",
-        "owner": "Analytics Team"
+        "owner": "Analytics Team",
+        "bi_tool": "Tableau",
+        "tags": "revenue, pipeline, conversion"
       }
     }
   ],
@@ -154,74 +171,49 @@ Ask a question about analytics metadata.
 }
 ```
 
-#### `GET /health`
+**`domain` is optional** — omit it to search across all metadata, or pass a value to filter results to a specific business domain.
 
-Health check endpoint.
+### `GET /health`
 
-## Deployment
-
-### Cloud Run
-
-Build and deploy to Cloud Run:
-
-```bash
-# Build container
-gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/analytics-rag-search
-
-# Deploy to Cloud Run
-gcloud run deploy analytics-rag-search \
-  --image gcr.io/YOUR_PROJECT_ID/analytics-rag-search \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars GCP_PROJECT_ID=YOUR_PROJECT_ID,BQ_DATASET=analytics_metadata
+```json
+{ "status": "ok" }
 ```
+
+---
 
 ## Design Decisions
 
-### Why Metadata-Only?
+**Why metadata-only, not text-to-SQL?**
+Text-to-SQL systems require direct data warehouse access and carry security and governance risks. Searching over metadata is safer, faster, and more appropriate for documentation discovery — the core use case here.
 
-- **Security**: No direct access to raw analytics data
-- **Performance**: Lighter queries, faster responses
-- **Scope**: Focused on discovery, not ad-hoc querying
+**Why BigQuery Vector Search instead of a dedicated vector DB?**
+For teams already on GCP, BigQuery Vector Search eliminates the need to manage a separate Pinecone or Weaviate instance. It scales natively, integrates with existing IAM and data governance, and uses pay-per-query pricing.
 
-### Why BigQuery Vector Search?
+**Why RAG instead of fine-tuning?**
+The metadata corpus is dynamic — reports and metrics are added and updated constantly. RAG allows the knowledge base to stay current without retraining. Retrieved documents are also fully traceable, which matters for analytics governance.
 
-- **Native Integration**: No separate vector database to manage
-- **Scalability**: Handles millions of vectors
-- **Cost-Effective**: Pay-per-query pricing
-- **Ecosystem**: Integrates with existing GCP data infrastructure
-
-### RAG vs. Fine-Tuning
-
-- **RAG**: Dynamic, updatable knowledge base without retraining
-- **Lower Cost**: No model training/hosting overhead
-- **Transparency**: Retrieved documents are traceable
-
-## Limitations
-
-- **No SQL Generation**: This is intentionally not a text-to-SQL system
-- **Metadata Quality**: Search quality depends on well-documented metadata
-- **Cold Start**: First query after deployment may be slow (LLM initialization)
+---
 
 ## Future Enhancements
 
-- [ ] Add metadata filtering by BI tool, owner, tags
-- [ ] Implement hybrid search (vector + keyword)
-- [ ] Add feedback loop for relevance tuning
-- [ ] Build Streamlit UI for non-technical users
-- [ ] Add metadata versioning and lineage tracking
+- [ ] Add `scripts/` for generating sample metadata and building embeddings (for local testing without a live GCP project)
+- [ ] Hybrid search — combine vector similarity with BM25 keyword scoring
+- [ ] Streamlit or React frontend for non-technical users
+- [ ] Metadata filtering by BI tool, owner, or tags via query parameters
+- [ ] Docker container + Cloud Run deployment configuration
+- [ ] Feedback loop for relevance tuning
 
-## Contributing
+---
 
-Contributions are welcome! Please open an issue or submit a pull request.
+## Author
+
+**Venkatasai Vudatha** — Data Analyst & ML Engineer
+📧 Vudatha.sai@gmail.com
+🔗 [linkedin.com/in/venkatasaivudatha04](https://www.linkedin.com/in/venkatasaivudatha04/)
+📍 Dallas, TX
+
+---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## Acknowledgements
-
-- [LangChain](https://langchain.com/) for RAG orchestration
-- [Google Cloud BigQuery](https://cloud.google.com/bigquery) for vector search
-- [Vertex AI](https://cloud.google.com/vertex-ai) for embeddings and LLM
+MIT License — see [LICENSE](LICENSE) for details.
